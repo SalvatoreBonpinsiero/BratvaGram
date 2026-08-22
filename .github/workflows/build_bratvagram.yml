@@ -1,0 +1,125 @@
+name: Build BratvaGram Auto-Bypass APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+
+      - name: Checkout Nekogram Source
+        uses: actions/checkout@v4
+        with:
+          repository: 'Nekogram/Nekogram'
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK & NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Build Tools & NDK
+        run: |
+          sdkmanager --install "ndk;25.2.9519653" "cmake;3.22.1"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Patch Defaults for Zero-Config Bypass
+        run: |
+          python3 - << 'EOF'
+          import os
+          import re
+
+          # 1. Смена названия на BratvaGram
+          for root, _, files in os.walk("TMessagesProj/src/main/res"):
+              for file in files:
+                  if file == "strings.xml":
+                      p = os.path.join(root, file)
+                      with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                          c = f.read()
+                      c = re.sub(r'<string name="AppName">.*?</string>', '<string name="AppName">BratvaGram</string>', c)
+                      c = re.sub(r'<string name="AppNameBeta">.*?</string>', '<string name="AppNameBeta">BratvaGram Beta</string>', c)
+                      with open(p, "w", encoding="utf-8") as f:
+                          f.write(c)
+
+          # 2. Принудительное включение ByeDPI по умолчанию в конфигах
+          target_configs = []
+          for root, _, files in os.walk("TMessagesProj/src/main/java"):
+              for file in files:
+                  if file in ["NekoConfig.java", "NekoConfig.kt", "ByeDpiHelper.java"]:
+                      target_configs.append(os.path.join(root, file))
+
+          for path in target_configs:
+              with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                  code = f.read()
+
+              # Активация локального прокси / ByeDPI по умолчанию (false -> true)
+              code = re.sub(r'public static boolean useByeDpi\s*=\s*false;', 'public static boolean useByeDpi = true;', code)
+              code = re.sub(r'public static boolean bypassDpi\s*=\s*false;', 'public static boolean bypassDpi = true;', code)
+              code = re.sub(r'public static boolean enableLocalProxy\s*=\s*false;', 'public static boolean enableLocalProxy = true;', code)
+              code = re.sub(r'var useByeDpi\s*=\s*false', 'var useByeDpi = true', code)
+              
+              # Вшивание стабильных аргументов фрагментации для ТСПУ РФ
+              code = re.sub(r'String byedpiArgs\s*=\s*".*?";', 'String byedpiArgs = "--split 2 --disoob 1 --auto=torst";', code)
+              code = re.sub(r'DEFAULT_ARGS\s*=\s*".*?";', 'DEFAULT_ARGS = "--split 2 --disoob 1 --auto=torst";', code)
+
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(code)
+
+          # 3. Принудительный старт демона ByeDPI в ApplicationLoader
+          for root, _, files in os.walk("TMessagesProj/src/main/java"):
+              for file in files:
+                  if file == "ApplicationLoader.java":
+                      app_loader_path = os.path.join(root, file)
+                      with open(app_loader_path, "r", encoding="utf-8", errors="ignore") as f:
+                          loader_code = f.read()
+
+                      # Авто-активация флага проксирования Telegram
+                      loader_code = loader_code.replace(
+                          "SharedConfig.loadProxyList();",
+                          "SharedConfig.loadProxyList();\n        SharedConfig.useProxySettings = true;\n        SharedConfig.saveProxySettings();"
+                      )
+
+                      with open(app_loader_path, "w", encoding="utf-8") as f:
+                          f.write(loader_code)
+          print("[✓] Все патчи авто-запуска успешно применены.")
+          EOF
+
+      - name: Grant Execute Permission for Gradlew
+        run: chmod +x gradlew
+
+      - name: Build BratvaGram APK
+        run: |
+          ./gradlew assembleAfatDebug --no-daemon --stacktrace
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-android.outputs.sdk-path }}/ndk/25.2.9519653
+
+      - name: Upload APK to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: BratvaGram-AutoAntiDPI-APK
+          path: TMessagesProj/build/outputs/apk/afat/debug/*.apk
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TMessagesProj/build/outputs/apk/afat/debug/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
