@@ -15,16 +15,16 @@ jobs:
         run: |
           sudo swapoff -a || true
           sudo rm -f /swapfile
-          sudo dd if=/dev/zero of=/swapfile bs=1M count=6144
+          sudo dd if=/dev/zero of=/swapfile bs=1M count=8192
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
 
       - name: Free Disk Space
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost"
+          sudo rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost" /usr/local/lib/android
 
-      - name: Checkout Source
+      - name: Checkout Source with Submodules
         uses: actions/checkout@v4
         with:
           repository: 'Nekogram/Nekogram'
@@ -42,15 +42,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Setup Android SDK Environment & NDK
+      - name: Setup Android SDK Environment
         run: |
           mkdir -p $HOME/.android
           touch $HOME/.android/repositories.cfg
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;25.2.9519653" "cmake;3.22.1" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-          echo "ndk.dir=$ANDROID_HOME/ndk/25.2.9519653" >> local.properties
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653" >> $GITHUB_ENV
 
       - name: Apply BratvaGram Patch
         run: |
@@ -82,20 +79,15 @@ jobs:
                               code = f.read()
                           
                           changed = False
-                          if "useByeDpi" in code:
-                              code = re.sub(r'useByeDpi\s*=\s*false', 'useByeDpi = true', code)
+                          if "getBoolean(\"byedpi\"" in code:
+                              code = code.replace('getBoolean("byedpi", false)', 'getBoolean("byedpi", true)')
                               changed = True
-                          if "bypassDpi" in code:
-                              code = re.sub(r'bypassDpi\s*=\s*false', 'bypassDpi = true', code)
+                          if "getBoolean(\"useByeDpi\"" in code:
+                              code = code.replace('getBoolean("useByeDpi", false)', 'getBoolean("useByeDpi", true)')
                               changed = True
-                          if "enableLocalProxy" in code:
-                              code = re.sub(r'enableLocalProxy\s*=\s*false', 'enableLocalProxy = true', code)
-                              changed = True
-                          if "DEFAULT_BYEDPI_ARGS" in code:
-                              code = re.sub(r'DEFAULT_BYEDPI_ARGS\s*=\s*".*?"', 'DEFAULT_BYEDPI_ARGS = "--split 2 --disoob 1 --auto=torst"', code)
-                              changed = True
-                          if "defaultByedpiArgs" in code:
-                              code = re.sub(r'defaultByedpiArgs\s*=\s*".*?"', 'defaultByedpiArgs = "--split 2 --disoob 1 --auto=torst"', code)
+                          if "getString(\"byedpiArgs\"" in code:
+                              code = code.replace('getString("byedpiArgs", "")', 'getString("byedpiArgs", "--split 2 --disoob 1 --auto=torst")')
+                              code = code.replace('getString("byedpiArgs", null)', 'getString("byedpiArgs", "--split 2 --disoob 1 --auto=torst")')
                               changed = True
 
                           if changed:
@@ -105,29 +97,30 @@ jobs:
                           pass
           EOF
 
-      - name: Configure Build Memory
+      - name: Configure Gradle Environment
         run: |
           mkdir -p ~/.gradle
           echo "org.gradle.jvmargs=-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m" > ~/.gradle/gradle.properties
           echo "org.gradle.workers.max=2" >> ~/.gradle/gradle.properties
           echo "org.gradle.parallel=false" >> ~/.gradle/gradle.properties
           echo "android.useAndroidX=true" >> ~/.gradle/gradle.properties
+          echo "android.builder.sdkDownload=true" >> ~/.gradle/gradle.properties
           chmod +x gradlew
 
       - name: Build APK
         run: |
-          ./gradlew :TMessagesProj:assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleAfatDebug --no-daemon --stacktrace
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: BratvaGram-Bypass-APK
-          path: TMessagesProj/build/outputs/apk/**/*.apk
+          path: TMessagesProj/build/outputs/apk/afat/debug/*.apk
 
       - name: Release APK
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: TMessagesProj/build/outputs/apk/**/*.apk
+          files: TMessagesProj/build/outputs/apk/afat/debug/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
