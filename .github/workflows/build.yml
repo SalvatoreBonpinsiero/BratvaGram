@@ -1,4 +1,4 @@
-name: Build BratvaGram PC Bundle
+name: Build BratvaDPI Windows Service
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-bundle:
+  build:
     runs-on: windows-latest
 
     steps:
@@ -24,7 +24,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Download WinDivert Driver
+      - name: Download WinDivert Binaries
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri "https://github.com/basil00/WinDivert/releases/download/v2.2.2/WinDivert-2.2.2-A.zip" -OutFile "windivert.zip"
@@ -32,43 +32,35 @@ jobs:
           Copy-Item "windivert_extracted\WinDivert-2.2.2-A\x64\WinDivert.dll" -Destination "."
           Copy-Item "windivert_extracted\WinDivert-2.2.2-A\x64\WinDivert64.sys" -Destination "."
 
-      - name: Download Official Telegram Desktop Portable
-        shell: pwsh
+      - name: Build Service Executable
         run: |
-          New-Item -ItemType Directory -Force -Path "bundle_dist\Telegram"
-          Invoke-WebRequest -Uri "https://telegram.org/dl/desktop/win64_portable" -OutFile "tportable.zip"
-          Expand-Archive -Path "tportable.zip" -DestinationPath "temp_tg"
-          
-          if (Test-Path "temp_tg\Telegram\Telegram.exe") {
-            Copy-Item -Path "temp_tg\Telegram\*" -Destination "bundle_dist\Telegram" -Recurse
-          } else {
-            Copy-Item -Path "temp_tg\*" -Destination "bundle_dist\Telegram" -Recurse
-          }
-
-      - name: Build BratvaGram.exe Launcher
-        run: |
-          pyinstaller --noconfirm --onefile --console --name "BratvaGram" `
+          pyinstaller --noconfirm --onefile --console --name "BratvaService" `
             --add-binary "WinDivert.dll;." `
             --add-binary "WinDivert64.sys;." `
             --uac-admin `
-            launcher.py
-          copy dist\BratvaGram.exe bundle_dist\
+            service.py
 
-      - name: Compress Full Portable Package
+      - name: Prepare Release Bundle
         shell: pwsh
         run: |
-          Compress-Archive -Path "bundle_dist\*" -DestinationPath "BratvaGram_PC_Portable.zip"
+          New-Item -ItemType Directory -Force -Path "bundle"
+          Copy-Item "dist\BratvaService.exe" -Destination "bundle\"
+          Copy-Item "WinDivert.dll" -Destination "bundle\"
+          Copy-Item "WinDivert64.sys" -Destination "bundle\"
+          Copy-Item "service_install.bat" -Destination "bundle\"
+          Copy-Item "service_remove.bat" -Destination "bundle\"
+          Compress-Archive -Path "bundle\*" -DestinationPath "BratvaDPI_Service_x64.zip"
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BratvaGram-PC-Portable
-          path: BratvaGram_PC_Portable.zip
+          name: BratvaDPI-Windows-Service
+          path: BratvaDPI_Service_x64.zip
 
-      - name: Release Portable Bundle
+      - name: Release Executable
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: BratvaGram_PC_Portable.zip
+          files: BratvaDPI_Service_x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
