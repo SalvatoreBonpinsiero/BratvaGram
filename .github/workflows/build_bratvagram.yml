@@ -1,4 +1,4 @@
-name: Build BratvaGram Auto-Bypass APK
+name: Build BratvaGram Telegram DPI APK
 
 on:
   workflow_dispatch:
@@ -11,16 +11,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Free Disk Space & Fix Permissions
+      - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost"
-          sudo mkdir -p /usr/local/lib/android
-          sudo chown -R $USER:$USER /usr/local/lib/android
 
-      - name: Checkout Nekogram Source
+      - name: Checkout Telegram-FOSS
         uses: actions/checkout@v4
         with:
-          repository: 'Nekogram/Nekogram'
+          repository: 'Telegram-FOSS-Team/Telegram-FOSS'
           submodules: recursive
           fetch-depth: 1
 
@@ -35,18 +33,39 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Android NDK and CMake
+      - name: Setup Android SDK Environment & Licenses
         run: |
-          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;25.2.9519653" "cmake;3.22.1"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653" >> $GITHUB_ENV
+          mkdir -p $HOME/.android
+          touch $HOME/.android/repositories.cfg
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Patch Defaults for Zero-Config Bypass
+      - name: Build and Embed ByeDPI Native Engine
+        run: |
+          git clone --depth=1 https://github.com/hufrea/byedpi.git byedpi_src
+          mkdir -p TMessagesProj/src/main/assets
+          
+          NDK_TOOLCHAIN=$ANDROID_HOME/ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin
+          if [ -d "$NDK_TOOLCHAIN" ]; then
+            $NDK_TOOLCHAIN/aarch64-linux-android33-clang -O2 \
+              byedpi_src/main.c byedpi_src/proxy.c byedpi_src/conev.c byedpi_src/desync.c \
+              -o TMessagesProj/src/main/assets/ciadpi || true
+          fi
+
+          if [ ! -f "TMessagesProj/src/main/assets/ciadpi" ]; then
+            curl -fL "https://github.com/hufrea/byedpi/releases/download/v0.12/byedpi-12-aarch64.tar.gz" -o byedpi.tar.gz || true
+            if [ -f "byedpi.tar.gz" ]; then
+              tar -xzf byedpi.tar.gz
+              mv ciadpi TMessagesProj/src/main/assets/ciadpi || true
+            fi
+          fi
+
+      - name: Patch Telegram Sources for DPI Bypass
         run: |
           python3 - << 'EOF'
           import os
           import re
 
-          # 1. Смена названия на BratvaGram
           for root, _, files in os.walk("TMessagesProj/src/main/res"):
               for file in files:
                   if file == "strings.xml":
@@ -55,60 +74,78 @@ jobs:
                           c = f.read()
                       c = re.sub(r'<string name="AppName">.*?</string>', '<string name="AppName">BratvaGram</string>', c)
                       c = re.sub(r'<string name="AppNameBeta">.*?</string>', '<string name="AppNameBeta">BratvaGram Beta</string>', c)
+                      c = re.sub(r'<string name="app_name">.*?</string>', '<string name="app_name">BratvaGram</string>', c)
                       with open(p, "w", encoding="utf-8") as f:
                           f.write(c)
 
-          # 2. Принудительное включение ByeDPI по умолчанию в конфигах
-          target_configs = []
-          for root, _, files in os.walk("TMessagesProj/src/main/java"):
-              for file in files:
-                  if file in ["NekoConfig.java", "NekoConfig.kt", "ByeDpiHelper.java"]:
-                      target_configs.append(os.path.join(root, file))
+          shared_config_path = "TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java"
+          if os.path.exists(shared_config_path):
+              with open(shared_config_path, "r", encoding="utf-8") as f:
+                  sc_code = f.read()
 
-          for path in target_configs:
-              with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                  code = f.read()
+              proxy_injection = """
+              if (currentProxy == null) {
+                  ProxyInfo localProxy = new ProxyInfo("127.0.0.1", 9876, "", "", "");
+                  localProxy.available = true;
+                  currentProxy = localProxy;
+                  proxyList.add(localProxy);
+                  useProxySettings = true;
+                  saveProxyList();
+              }
+              """
+              sc_code = sc_code.replace("public static void loadProxyList() {", "public static void loadProxyList() {\n" + proxy_injection)
+              with open(shared_config_path, "w", encoding="utf-8") as f:
+                  f.write(sc_code)
 
-              code = re.sub(r'public static boolean useByeDpi\s*=\s*false;', 'public static boolean useByeDpi = true;', code)
-              code = re.sub(r'public static boolean bypassDpi\s*=\s*false;', 'public static boolean bypassDpi = true;', code)
-              code = re.sub(r'public static boolean enableLocalProxy\s*=\s*false;', 'public static boolean enableLocalProxy = true;', code)
-              code = re.sub(r'var useByeDpi\s*=\s*false', 'var useByeDpi = true', code)
-              
-              code = re.sub(r'String byedpiArgs\s*=\s*".*?";', 'String byedpiArgs = "--split 2 --disoob 1 --auto=torst";', code)
-              code = re.sub(r'DEFAULT_ARGS\s*=\s*".*?";', 'DEFAULT_ARGS = "--split 2 --disoob 1 --auto=torst";', code)
+          app_loader_path = "TMessagesProj/src/main/java/org/telegram/messenger/ApplicationLoader.java"
+          if os.path.exists(app_loader_path):
+              with open(app_loader_path, "r", encoding="utf-8") as f:
+                  al_code = f.read()
 
-              with open(path, "w", encoding="utf-8") as f:
-                  f.write(code)
-
-          # 3. Принудительный старт проксирования в ApplicationLoader
-          for root, _, files in os.walk("TMessagesProj/src/main/java"):
-              for file in files:
-                  if file == "ApplicationLoader.java":
-                      app_loader_path = os.path.join(root, file)
-                      with open(app_loader_path, "r", encoding="utf-8", errors="ignore") as f:
-                          loader_code = f.read()
-
-                      loader_code = loader_code.replace(
-                          "SharedConfig.loadProxyList();",
-                          "SharedConfig.loadProxyList();\n        SharedConfig.useProxySettings = true;\n        SharedConfig.saveProxySettings();"
-                      )
-
-                      with open(app_loader_path, "w", encoding="utf-8") as f:
-                          f.write(loader_code)
-          print("[✓] Все патчи авто-запуска успешно применены.")
+              start_daemon = """
+              try {
+                  java.io.File bin = new java.io.File(applicationContext.getFilesDir(), "ciadpi");
+                  if (!bin.exists()) {
+                      java.io.InputStream in = applicationContext.getAssets().open("ciadpi");
+                      java.io.FileOutputStream out = new java.io.FileOutputStream(bin);
+                      byte[] buf = new byte[4096];
+                      int len;
+                      while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
+                      in.close();
+                      out.close();
+                      bin.setExecutable(true);
+                  }
+                  Runtime.getRuntime().exec(new String[]{
+                      bin.getAbsolutePath(),
+                      "--ip", "127.0.0.1",
+                      "--port", "9876",
+                      "--split", "2",
+                      "--disoob", "1",
+                      "--auto=torst"
+                  });
+              } catch (Throwable ignored) {}
+              """
+              al_code = al_code.replace("public void onCreate() {", "public void onCreate() {\n" + start_daemon)
+              with open(app_loader_path, "w", encoding="utf-8") as f:
+                  f.write(al_code)
           EOF
 
-      - name: Grant Execute Permission for Gradlew
-        run: chmod +x gradlew
+      - name: Configure Gradle Memory & Build Settings
+        run: |
+          mkdir -p ~/.gradle
+          echo "org.gradle.jvmargs=-Xmx5120m -XX:MaxMetaspaceSize=1024m" > ~/.gradle/gradle.properties
+          echo "org.gradle.parallel=true" >> ~/.gradle/gradle.properties
+          echo "android.useAndroidX=true" >> ~/.gradle/gradle.properties
+          chmod +x gradlew
 
       - name: Build BratvaGram APK
         run: |
           ./gradlew assembleAfatDebug --no-daemon --stacktrace
 
-      - name: Upload APK to Artifacts
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BratvaGram-AutoAntiDPI-APK
+          name: BratvaGram-DPI-APK
           path: TMessagesProj/build/outputs/apk/afat/debug/*.apk
 
       - name: Create Release
