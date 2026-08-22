@@ -19,10 +19,146 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Generate Source Files
+        shell: pwsh
+        run: |
+          @'
+          import threading
+          import pydivert
+
+          TLS_HANDSHAKE = b"\x16\x03"
+
+          class DpiEngine:
+              def __init__(self, split_pos: int = 2, fake_ttl: int = 3):
+                  self.split_pos = split_pos
+                  self.fake_ttl = fake_ttl
+                  self.running = False
+                  self.filter_rule = (
+                      "outbound and "
+                      "((tcp.PayloadLength > 0 and (tcp.DstPort == 80 or tcp.DstPort == 443 or tcp.DstPort == 8443 or tcp.DstPort == 5222)) or "
+                      "(udp.PayloadLength > 0 and (udp.DstPort == 443 or (udp.DstPort >= 50000 and udp.DstPort <= 65535))))"
+                  )
+
+              def is_tls_client_hello(self, payload: bytes) -> bool:
+                  return len(payload) > 5 and payload.startswith(TLS_HANDSHAKE)
+
+              def start(self):
+                  self.running = True
+                  try:
+                      with pydivert.WinDivert(self.filter_rule) as w:
+                          while self.running:
+                              try:
+                                  packet = w.recv(timeout=1000)
+                                  if packet is None:
+                                      continue
+
+                                  if packet.udp:
+                                      if packet.dst_port == 443:
+                                          continue
+                                      w.send(packet)
+                                      continue
+
+                                  payload = packet.payload
+                                  if self.is_tls_client_hello(payload):
+                                      fake_packet = packet
+                                      fake_packet.ipv4.ttl = self.fake_ttl
+                                      fake_packet.payload = b"\x16\x03\x01\x00\x05\x01\x00\x00\x01\x00"
+                                      w.send(fake_packet)
+
+                                      p1 = packet
+                                      p1.payload = payload[:self.split_pos]
+                                      w.send(p1)
+
+                                      p2 = packet
+                                      p2.tcp.seq_num += len(p1.payload)
+                                      p2.payload = payload[self.split_pos:]
+                                      w.send(p2)
+                                      continue
+
+                                  w.send(packet)
+                              except Exception:
+                                  continue
+                  except Exception:
+                      pass
+
+              def stop(self):
+                  self.running = False
+          '@ | Set-Content -Path "core.py" -Encoding UTF8
+
+          @'
+          import os
+          import sys
+          import threading
+          import win32serviceutil
+          import win32service
+          import win32event
+          import servicemanager
+          from core import DpiEngine
+
+          class BratvaDpiService(win32serviceutil.ServiceFramework):
+              _svc_name_ = "BratvaDPI"
+              _svc_display_name_ = "BratvaDPI Service"
+              _svc_description_ = "Background TCP/UDP Desync and DPI Bypass Engine"
+
+              def __init__(self, args):
+                  super().__init__(args)
+                  self.hWaitStop = win32event.CreateEvent(None, 0, 0, None)
+                  self.engine = DpiEngine(split_pos=2, fake_ttl=3)
+
+              def SvcStop(self):
+                  self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+                  self.engine.stop()
+                  win32event.SetEvent(self.hWaitStop)
+
+              def SvcDoRun(self):
+                  servicemanager.LogMsg(
+                      servicemanager.EVENTLOG_INFORMATION_TYPE,
+                      servicemanager.PYS_SERVICE_STARTED,
+                      (self._svc_name_, "")
+                  )
+                  thread = threading.Thread(target=self.engine.start, daemon=True)
+                  thread.start()
+                  win32event.WaitForSingleObject(self.hWaitStop, win32event.INFINITE)
+
+          if __name__ == "__main__":
+              if len(sys.argv) == 1:
+                  servicemanager.Initialize()
+                  servicemanager.PrepareToHostSingle(BratvaDpiService)
+                  servicemanager.StartServiceCtrlDispatcher()
+              else:
+                  win32serviceutil.HandleCommandLine(BratvaDpiService)
+          '@ | Set-Content -Path "service.py" -Encoding UTF8
+
+          @'
+          @echo off
+          cd /d "%~dp0"
+          net session >nul 2>&1
+          if %errorlevel% neq 0 (
+              powershell -Command "Start-Process '%~0' -Verb RunAs"
+              exit /b
+          )
+          BratvaService.exe --startup auto install
+          BratvaService.exe start
+          pause
+          '@ | Set-Content -Path "service_install.bat" -Encoding OEM
+
+          @'
+          @echo off
+          cd /d "%~dp0"
+          net session >nul 2>&1
+          if %errorlevel% neq 0 (
+              powershell -Command "Start-Process '%~0' -Verb RunAs"
+              exit /b
+          )
+          BratvaService.exe stop
+          BratvaService.exe remove
+          pause
+          '@ | Set-Content -Path "service_remove.bat" -Encoding OEM
+
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install pydivert pywin32 pyinstaller
 
       - name: Download WinDivert Binaries
         shell: pwsh
