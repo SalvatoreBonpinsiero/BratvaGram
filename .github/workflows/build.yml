@@ -64,6 +64,8 @@ jobs:
 
           def sub_str(m):
               pre, val, post = m.group(1), m.group(2), m.group(3)
+              if val.strip().startswith("@"):
+                  return m.group(0)
               val = val.replace("Nekogram Beta", "BratvaGram Beta")
               val = val.replace("Nekogram", "BratvaGram")
               val = val.replace("Neko Settings", "Bratva Settings")
@@ -94,11 +96,19 @@ jobs:
 
                           changed = False
                           if "useByeDpi" in code:
-                              code = re.sub(r'const/4\s+v(\d+),\s*0x0\s+sput-boolean\s+v\1,\s*L[^;]+;->useByeDpi:Z', r'const/4 v\1, 0x1\n    sput-boolean v\1, Ltw/nekomimi/nekogram/NekoConfig;->useByeDpi:Z', code)
+                              code = re.sub(
+                                  r'(const/4\s+v\d+,\s*)0x0(\s+sput-boolean\s+v\d+,\s*L[^;]+;->useByeDpi:Z)',
+                                  r'\g<1>0x1\g<2>',
+                                  code
+                              )
                               changed = True
 
                           if "byedpiArgs" in code or "DEFAULT_BYEDPI_ARGS" in code or "defaultByedpiArgs" in code:
-                              code = re.sub(r'const-string\s+v(\d+),\s*""', r'const-string v\1, "--split 2 --disoob 1 --auto=torst"', code)
+                              code = re.sub(
+                                  r'const-string\s+(v\d+),\s*""',
+                                  r'const-string \1, "--split 2 --disoob 1 --auto=torst"',
+                                  code
+                              )
                               changed = True
 
                           if changed:
