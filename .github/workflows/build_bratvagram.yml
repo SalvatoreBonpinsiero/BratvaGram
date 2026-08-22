@@ -1,4 +1,4 @@
-name: Build BratvaGram Telegram DPI APK
+name: Build BratvaGram APK
 
 on:
   workflow_dispatch:
@@ -11,14 +11,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Setup Swap Space
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /swapfile
+          sudo dd if=/dev/zero of=/swapfile bs=1M count=6144
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost"
 
-      - name: Checkout Telegram-FOSS
+      - name: Checkout Source
         uses: actions/checkout@v4
         with:
-          repository: 'Telegram-FOSS-Team/Telegram-FOSS'
+          repository: 'Nekogram/Nekogram'
           submodules: recursive
           fetch-depth: 1
 
@@ -33,34 +42,14 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Setup Android SDK Environment & Licenses
+      - name: Setup Android SDK Environment
         run: |
           mkdir -p $HOME/.android
           touch $HOME/.android/repositories.cfg
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Build and Embed ByeDPI Native Engine
-        run: |
-          git clone --depth=1 https://github.com/hufrea/byedpi.git byedpi_src
-          mkdir -p TMessagesProj/src/main/assets
-          
-          NDK_TOOLCHAIN=$ANDROID_HOME/ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin
-          if [ -d "$NDK_TOOLCHAIN" ]; then
-            $NDK_TOOLCHAIN/aarch64-linux-android33-clang -O2 \
-              byedpi_src/main.c byedpi_src/proxy.c byedpi_src/conev.c byedpi_src/desync.c \
-              -o TMessagesProj/src/main/assets/ciadpi || true
-          fi
-
-          if [ ! -f "TMessagesProj/src/main/assets/ciadpi" ]; then
-            curl -fL "https://github.com/hufrea/byedpi/releases/download/v0.12/byedpi-12-aarch64.tar.gz" -o byedpi.tar.gz || true
-            if [ -f "byedpi.tar.gz" ]; then
-              tar -xzf byedpi.tar.gz
-              mv ciadpi TMessagesProj/src/main/assets/ciadpi || true
-            fi
-          fi
-
-      - name: Patch Telegram Sources for DPI Bypass
+      - name: Apply BratvaGram Patch
         run: |
           python3 - << 'EOF'
           import os
@@ -70,88 +59,72 @@ jobs:
               for file in files:
                   if file == "strings.xml":
                       p = os.path.join(root, file)
-                      with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                          c = f.read()
-                      c = re.sub(r'<string name="AppName">.*?</string>', '<string name="AppName">BratvaGram</string>', c)
-                      c = re.sub(r'<string name="AppNameBeta">.*?</string>', '<string name="AppNameBeta">BratvaGram Beta</string>', c)
-                      c = re.sub(r'<string name="app_name">.*?</string>', '<string name="app_name">BratvaGram</string>', c)
-                      with open(p, "w", encoding="utf-8") as f:
-                          f.write(c)
+                      try:
+                          with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                              c = f.read()
+                          c = re.sub(r'<string name="AppName">.*?</string>', '<string name="AppName">BratvaGram</string>', c)
+                          c = re.sub(r'<string name="AppNameBeta">.*?</string>', '<string name="AppNameBeta">BratvaGram Beta</string>', c)
+                          c = re.sub(r'<string name="app_name">.*?</string>', '<string name="app_name">BratvaGram</string>', c)
+                          with open(p, "w", encoding="utf-8") as f:
+                              f.write(c)
+                      except Exception:
+                          pass
 
-          shared_config_path = "TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java"
-          if os.path.exists(shared_config_path):
-              with open(shared_config_path, "r", encoding="utf-8") as f:
-                  sc_code = f.read()
+          for root, _, files in os.walk("TMessagesProj/src/main/java"):
+              for file in files:
+                  if file.endswith((".java", ".kt")):
+                      p = os.path.join(root, file)
+                      try:
+                          with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                              code = f.read()
+                          
+                          changed = False
+                          if "useByeDpi" in code:
+                              code = re.sub(r'useByeDpi\s*=\s*false', 'useByeDpi = true', code)
+                              changed = True
+                          if "bypassDpi" in code:
+                              code = re.sub(r'bypassDpi\s*=\s*false', 'bypassDpi = true', code)
+                              changed = True
+                          if "enableLocalProxy" in code:
+                              code = re.sub(r'enableLocalProxy\s*=\s*false', 'enableLocalProxy = true', code)
+                              changed = True
+                          if "DEFAULT_BYEDPI_ARGS" in code:
+                              code = re.sub(r'DEFAULT_BYEDPI_ARGS\s*=\s*".*?"', 'DEFAULT_BYEDPI_ARGS = "--split 2 --disoob 1 --auto=torst"', code)
+                              changed = True
+                          if "defaultByedpiArgs" in code:
+                              code = re.sub(r'defaultByedpiArgs\s*=\s*".*?"', 'defaultByedpiArgs = "--split 2 --disoob 1 --auto=torst"', code)
+                              changed = True
 
-              proxy_injection = """
-              if (currentProxy == null) {
-                  ProxyInfo localProxy = new ProxyInfo("127.0.0.1", 9876, "", "", "");
-                  localProxy.available = true;
-                  currentProxy = localProxy;
-                  proxyList.add(localProxy);
-                  useProxySettings = true;
-                  saveProxyList();
-              }
-              """
-              sc_code = sc_code.replace("public static void loadProxyList() {", "public static void loadProxyList() {\n" + proxy_injection)
-              with open(shared_config_path, "w", encoding="utf-8") as f:
-                  f.write(sc_code)
-
-          app_loader_path = "TMessagesProj/src/main/java/org/telegram/messenger/ApplicationLoader.java"
-          if os.path.exists(app_loader_path):
-              with open(app_loader_path, "r", encoding="utf-8") as f:
-                  al_code = f.read()
-
-              start_daemon = """
-              try {
-                  java.io.File bin = new java.io.File(applicationContext.getFilesDir(), "ciadpi");
-                  if (!bin.exists()) {
-                      java.io.InputStream in = applicationContext.getAssets().open("ciadpi");
-                      java.io.FileOutputStream out = new java.io.FileOutputStream(bin);
-                      byte[] buf = new byte[4096];
-                      int len;
-                      while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
-                      in.close();
-                      out.close();
-                      bin.setExecutable(true);
-                  }
-                  Runtime.getRuntime().exec(new String[]{
-                      bin.getAbsolutePath(),
-                      "--ip", "127.0.0.1",
-                      "--port", "9876",
-                      "--split", "2",
-                      "--disoob", "1",
-                      "--auto=torst"
-                  });
-              } catch (Throwable ignored) {}
-              """
-              al_code = al_code.replace("public void onCreate() {", "public void onCreate() {\n" + start_daemon)
-              with open(app_loader_path, "w", encoding="utf-8") as f:
-                  f.write(al_code)
+                          if changed:
+                              with open(p, "w", encoding="utf-8") as f:
+                                  f.write(code)
+                      except Exception:
+                          pass
           EOF
 
-      - name: Configure Gradle Memory & Build Settings
+      - name: Configure Build Memory
         run: |
           mkdir -p ~/.gradle
-          echo "org.gradle.jvmargs=-Xmx5120m -XX:MaxMetaspaceSize=1024m" > ~/.gradle/gradle.properties
-          echo "org.gradle.parallel=true" >> ~/.gradle/gradle.properties
+          echo "org.gradle.jvmargs=-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m" > ~/.gradle/gradle.properties
+          echo "org.gradle.workers.max=2" >> ~/.gradle/gradle.properties
+          echo "org.gradle.parallel=false" >> ~/.gradle/gradle.properties
           echo "android.useAndroidX=true" >> ~/.gradle/gradle.properties
           chmod +x gradlew
 
-      - name: Build BratvaGram APK
+      - name: Build APK
         run: |
-          ./gradlew assembleAfatDebug --no-daemon --stacktrace
+          ./gradlew assembleAfatDebug --no-daemon --stacktrace || ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Upload APK Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BratvaGram-DPI-APK
-          path: TMessagesProj/build/outputs/apk/afat/debug/*.apk
+          name: BratvaGram-Bypass-APK
+          path: TMessagesProj/build/outputs/apk/**/*.apk
 
-      - name: Create Release
+      - name: Release APK
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: TMessagesProj/build/outputs/apk/afat/debug/*.apk
+          files: TMessagesProj/build/outputs/apk/**/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
