@@ -47,23 +47,25 @@ jobs:
           sudo mv apktool apktool.jar /usr/local/bin/
           curl -fsSL "https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar" -o uber-apk-signer.jar
 
-      - name: Download Base APK
+      - name: Download Target APK
         run: |
           curl -fL -A "Mozilla/5.0" "https://github.com/Nekogram/Nekogram/releases/download/v12.9.2/Nekogram-12.9.2-6991-arm64-v8a.apk" -o base.apk
 
-      - name: Decompile APK
+      - name: Decompile Resources Only
         run: |
           export _JAVA_OPTIONS="-Xmx6144M"
-          apktool d -f base.apk -o decompiled_apk
+          apktool d -s -f base.apk -o decompiled_apk
 
-      - name: Apply BratvaGram Patch
+      - name: Apply Safe Branding Patch
         run: |
           python3 - << 'EOF'
           import os
           import re
 
-          def sub_str(m):
-              pre, val, post = m.group(1), m.group(2), m.group(3)
+          def sanitize_val(m):
+              head = m.group(1)
+              val = m.group(2)
+              tail = m.group(3)
               if val.strip().startswith("@"):
                   return m.group(0)
               val = val.replace("Nekogram Beta", "BratvaGram Beta")
@@ -71,7 +73,7 @@ jobs:
               val = val.replace("Neko Settings", "Bratva Settings")
               val = val.replace("Настройки Neko", "Настройки Bratva")
               val = val.replace("Neko", "Bratva")
-              return f"{pre}{val}{post}"
+              return f"{head}{val}{tail}"
 
           for root, _, files in os.walk("decompiled_apk/res"):
               for file in files:
@@ -79,41 +81,10 @@ jobs:
                       p = os.path.join(root, file)
                       try:
                           with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                              c = f.read()
-                          c = re.sub(r'(<string\s+name="[^"]+"[^>]*>)(.*?)(</string>)', sub_str, c, flags=re.DOTALL)
+                              content = f.read()
+                          content = re.sub(r'(<string\s+name="[^"]+"[^>]*>)(.*?)(</string>)', sanitize_val, content, flags=re.DOTALL)
                           with open(p, "w", encoding="utf-8") as f:
-                              f.write(c)
-                      except Exception:
-                          pass
-
-          for root, _, files in os.walk("decompiled_apk"):
-              for file in files:
-                  if file.endswith(".smali"):
-                      p = os.path.join(root, file)
-                      try:
-                          with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                              code = f.read()
-
-                          changed = False
-                          if "useByeDpi" in code:
-                              code = re.sub(
-                                  r'(const/4\s+v\d+,\s*)0x0(\s+sput-boolean\s+v\d+,\s*L[^;]+;->useByeDpi:Z)',
-                                  r'\g<1>0x1\g<2>',
-                                  code
-                              )
-                              changed = True
-
-                          if "byedpiArgs" in code or "DEFAULT_BYEDPI_ARGS" in code or "defaultByedpiArgs" in code:
-                              code = re.sub(
-                                  r'const-string\s+(v\d+),\s*""',
-                                  r'const-string \1, "--split 2 --disoob 1 --auto=torst"',
-                                  code
-                              )
-                              changed = True
-
-                          if changed:
-                              with open(p, "w", encoding="utf-8") as f:
-                                  f.write(code)
+                              f.write(content)
                       except Exception:
                           pass
           EOF
@@ -130,7 +101,7 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BratvaGram-Release-APK
+          name: BratvaGram-Stable-APK
           path: dist/*.apk
 
       - name: Release APK
